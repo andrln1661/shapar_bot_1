@@ -5,12 +5,11 @@ const bot = new TeleBot({ token: process.env.BOT_TOKEN, polling: true });
 
 const users = {};
 const adminId = parseInt(process.env.ADMIN_ID);
-users[adminId] = { id: adminId };
 const bundles = [];
 const channels = {};
 
 //Test commands
-bot.on("/bundle", (msg) => {
+bot.on("/bundles", (msg) => {
   if (!msg.from) return;
   if (bundles.length) bot.sendMessage(msg.chat.id, bundles.join("\r\n"));
 });
@@ -41,10 +40,21 @@ async function checkUser(userId) {
 
 //Send bundle to users
 async function mainling() {
+  console.log("users: ", users);
   Object.keys(users).map(async (user) => {
-    let userStatus = await checkUser(user.id);
+    let userStatus = await checkUser(users[user]);
     if (userStatus) {
-      bot.sendMessage(user.id, bundles[Math.random() * bundles.length]);
+      if (bundles.length) {
+        bot.sendMessage(
+          users[user].id,
+          bundles[Math.floor(Math.random() * bundles.length)]
+        );
+      } else {
+        bot.sendMessage(
+          users[user].id,
+          "Sorry for now there is no active bundle"
+        );
+      }
     } else {
       let keyboard = [[{ text: "Check Again", callback_data: "check" }]];
       for (let channel of Object.keys(channels)) {
@@ -58,7 +68,7 @@ async function mainling() {
     }
   });
 }
-setInterval(mainling, 1000 * 60);
+setInterval(mainling, 1000 * 10);
 
 //Basic commands the same functionality should verify user's subscriptions, send the first bundle and pass user to waiting list
 bot.on(["/start", "/check"], async (msg) => {
@@ -173,7 +183,7 @@ bot.on("callbackQuery", (callbackQuery) => {
 });
 
 //Commant to auth admin
-bot.on("/hjfylx", (msg) => {
+bot.on("/channel", (msg) => {
   if (!msg.from) return;
   if (msg.chat.id == adminId) {
     let keyboard = [
@@ -186,6 +196,12 @@ bot.on("/hjfylx", (msg) => {
     bot.sendMessage(msg.chat.id, "Select option from the following menu", {
       replyMarkup: { inline_keyboard: keyboard },
     });
+  }
+});
+
+bot.on("/mail", (msg) => {
+  if (msg.from && msg.chat.id == adminId) {
+    mainling();
   }
 });
 
