@@ -1,6 +1,11 @@
 import TeleBot from "telebot";
 import fs from "fs";
 import { config } from "dotenv";
+import {
+  help_message,
+  no_active_budle,
+  subscription_positive,
+} from "./messages.js";
 config();
 const bot = new TeleBot({ token: process.env.BOT_TOKEN, polling: true });
 
@@ -28,6 +33,9 @@ const channels = {
   },
 };
 
+const sendBundlesAuto = process.env.SEND_BUNDLES_AUTO * 60 * 60 * 12;
+const checkUsersHours = process.env.CHECK_USERS_HOURS * 60 * 60 * 12;
+
 //Vars to verify if admin gonna do smth
 let adminEvent = "none";
 
@@ -37,9 +45,12 @@ function clearBundles() {
       let now = new Date();
       if (now - bundles[bundle].created > 1000 * 60 * 30) {
         delete bundles[bundle];
+        bot.deleteMessage(-1001721564781, bundles[bundle].message_id);
+        bot.deleteMessage(-1001721564781, bundles[bundle].message_id + 1);
       }
     });
   }
+  console.log("Irrelevant bundles has been cleared");
 }
 setInterval(clearBundles, 30 * 60 * 1000);
 
@@ -55,24 +66,27 @@ async function checkUser(userId) {
       result = false;
     }
   }
+  console.log(`Checking if user ${userId} subscribed to the required channels`);
   return result;
 }
 
 // send message to user that he is not subscribed
 function notSubscribed(userId) {
+  console.log(`Sending message to user ${userId} that he is not subscribed`);
   let keyboard = [[{ text: "Check Again", callback_data: "check" }]];
   for (let channel of Object.keys(channels)) {
     keyboard.unshift([
       { text: channels[channel].title, url: channels[channel].link },
     ]);
-    bot.sendMessage(userId, "You are not a member", {
-      replyMarkup: { inline_keyboard: keyboard },
-    });
   }
+  bot.sendMessage(userId, "You are not a member", {
+    replyMarkup: { inline_keyboard: keyboard },
+  });
 }
 
 // Send bundle handler
 function sendBundles(userStatus, userId) {
+  console.log("Sending bundles to users");
   if (userStatus) {
     if (Object.keys(bundles).length) {
       let bundle =
@@ -89,18 +103,18 @@ function sendBundles(userStatus, userId) {
         if (err) console.error(err);
       });
     } else {
-      bot.sendMessage(
-        users[userId].id,
-        "Sorry for now there is no active bundle"
-      );
+      console.warn("No one relevant bundle in scrabber");
+      bot.sendMessage(users[userId].id, no_active_budle);
     }
   } else {
+    console.log(`User ${userId} is not subscribed`);
     notSubscribed(users[userId].id);
   }
 }
 
 //Send bundle to users
 async function mailing() {
+  console.log("Forced mailing calling by admin");
   Object.keys(users).map(async (user) => {
     let userStatus = await checkUser(users[user].id);
     sendBundles(userStatus, user);
@@ -109,29 +123,24 @@ async function mailing() {
 
 //Auto send bundle for user as 12 hours passed
 async function autoMailing() {
-  console.log("checking for users that are able to recieve bundle");
+  console.log("Automatic mailing");
   Object.keys(users).map(async (user) => {
     let now = new Date();
-    if (now.getHours() - users[user].bundle_sent.getHours() >= 2) {
+    let date = new Date(users[user].bundle_sent);
+    if (now.getHours() - date.getHours() > sendBundlesAuto) {
       let userStatus = await checkUser(users[user].id);
-      setTimeout(
-        sendBundles(userStatus, user),
-        users[user].bundle_sent - now + 12 * 60 * 60 * 1000
-      );
+      let callback = () => sendBundles(userStatus, user);
+      setTimeout(callback, date - now + sendBundlesAuto);
     }
   });
 }
-setInterval(autoMailing, 1000 * 60 * 60);
+setInterval(autoMailing, checkUsersHours);
 
 //Basic commands the same functionality should verify user's subscriptions, send the first bundle and pass user to waiting list
 bot.on(["/start", "/check"], async (msg) => {
   if (!msg.from) return;
   let userStatus = await checkUser(msg.chat.id);
   if (userStatus) {
-    bot.sendMessage(
-      msg.chat.id,
-      "You are a member. Thanks for subscription. Your bundle will be sent automaticly"
-    );
     if (!users[msg.chat.id]) {
       users[msg.chat.id] = { id: msg.chat.id, bundle_sent: new Date() };
       fs.writeFile("./users.json", JSON.stringify(users), (err, data) => {
@@ -141,8 +150,9 @@ bot.on(["/start", "/check"], async (msg) => {
           console.log("new user saved to users.json");
         }
       });
-      sendBundles(userStatus, msg.chat.id);
+      sendBundles(true, msg.chat.id);
     }
+    bot.sendMessage(msg.chat.id, subscription_positive);
   } else {
     notSubscribed(msg.chat.id);
   }
@@ -166,22 +176,11 @@ bot.on("/help", (msg) => {
       },
     ],
   ];
-  bot.sendMessage(
-    msg.chat.id,
-    `
-    You can type or select using buttons following commands
-
-/start (/check) - check your followers and get your bundle
-/help - if you need some help
-
-if you need more detailed explanation or smth else contact @admin
-    `,
-    {
-      replyMarkup: {
-        inline_keyboard: keyboard,
-      },
-    }
-  );
+  bot.sendMessage(msg.chat.id, help_message, {
+    replyMarkup: {
+      inline_keyboard: keyboard,
+    },
+  });
 });
 
 //Query handler (buttons)
@@ -226,9 +225,10 @@ bot.on("callbackQuery", (callbackQuery) => {
       }
       break;
     case "delete_bundle":
-      if (msg.chat.id == adminId) {
-        bot.sendMessage(msg.chat.id, "Bundle deleted");
-      }
+      console.log(`Forced delete bundle ${msg.message_id - 1}`);
+      if (bundles[msg.message_id - 1]) delete bundles[msg.message_id - 1];
+      bot.deleteMessage(-1001721564781, msg.message_id - 1);
+      bot.deleteMessage(-1001721564781, msg.message_id);
       break;
     case "admin_bundles":
       if (msg.chat.id == adminId) {
@@ -245,7 +245,7 @@ bot.on("callbackQuery", (callbackQuery) => {
     case "admin_users":
       if (msg.chat.id == adminId) {
         console.log(users);
-        if (Object.keys(users)) {
+        if (Object.keys(users).length) {
           bot.sendMessage(msg.chat.id, Object.keys(users).join("/r/n"));
         } else {
           bot.sendMessage(msg.chat.id, "no users");
