@@ -28,19 +28,7 @@ const channels = {
   },
 };
 
-//Test commands
-bot.on("/bundles", (msg) => {
-  if (!msg.from) return;
-  if (Object.keys(bundles).length)
-    bot.sendMessage(msg.chat.id, Object.keys(bundles).join(" id\r\n"));
-});
-bot.on("/channels", (msg) => {
-  if (!msg.from) return;
-  bot.sendMessage(msg.chat.id, JSON.stringify(channels));
-});
-
-//Vars to verify if admin gonna add smth
-let adminStatus = false;
+//Vars to verify if admin gonna do smth
 let adminEvent = "none";
 
 function clearBundles() {
@@ -64,13 +52,13 @@ async function checkUser(userId) {
       .then((res) => res.status)
       .catch((error) => console.error(error));
     if (status == "left") {
-      delete users[userId];
       result = false;
     }
   }
   return result;
 }
 
+// send message to user that he is not subscribed
 function notSubscribed(userId) {
   let keyboard = [[{ text: "Check Again", callback_data: "check" }]];
   for (let channel of Object.keys(channels)) {
@@ -83,72 +71,53 @@ function notSubscribed(userId) {
   }
 }
 
+// Send bundle handler
+function sendBundles(userStatus, userId) {
+  if (userStatus) {
+    if (Object.keys(bundles).length) {
+      let bundle =
+        bundles[
+          Object.keys(bundles)[
+            Math.floor(Math.random() * Object.keys(bundles).length)
+          ]
+        ];
+      bot.forwardMessage(userId, bundle.chat_id, bundle.message_id, {
+        notification: true,
+      });
+      users[userId].bundle_sent = new Date();
+      fs.writeFile("./users.json", JSON.stringify(users), (err, data) => {
+        if (err) console.error(err);
+      });
+    } else {
+      bot.sendMessage(
+        users[userId].id,
+        "Sorry for now there is no active bundle"
+      );
+    }
+  } else {
+    notSubscribed(users[userId].id);
+  }
+}
+
 //Send bundle to users
 async function mailing() {
   Object.keys(users).map(async (user) => {
     let userStatus = await checkUser(users[user].id);
-    if (userStatus) {
-      if (Object.keys(bundles).length) {
-        let bundle =
-          bundles[
-            Object.keys(bundles)[
-              Math.floor(Math.random() * Object.keys(bundles).length)
-            ]
-          ];
-        bot.forwardMessage(users[user].id, bundle.chat_id, bundle.message_id, {
-          notification: true,
-        });
-        users[user].bundle_sent = new Date();
-        fs.writeFile("./users.json", JSON.stringify(users), (err, data) => {
-          if (err) console.error(err);
-        });
-      } else {
-        bot.sendMessage(
-          users[user].id,
-          "Sorry for now there is no active bundle"
-        );
-      }
-    } else {
-      notSubscribed(users[user].id);
-    }
+    sendBundles(userStatus, user);
   });
 }
 
+//Auto send bundle for user as 12 hours passed
 async function autoMailing() {
   console.log("checking for users that are able to recieve bundle");
   Object.keys(users).map(async (user) => {
     let now = new Date();
-    if (now.getHours() - users[user].bundle_sent.getHours() < 12) {
+    if (now.getHours() - users[user].bundle_sent.getHours() >= 2) {
       let userStatus = await checkUser(users[user].id);
-      if (userStatus) {
-        if (Object.keys(bundles).length) {
-          let bundle =
-            bundles[
-              Object.keys(bundles)[
-                Math.floor(Math.random() * Object.keys(bundles).length)
-              ]
-            ];
-          bot.forwardMessage(
-            users[user].id,
-            bundle.chat_id,
-            bundle.message_id,
-            {
-              notification: true,
-            }
-          );
-          users[user].bundle_sent = new Date();
-          fs.writeFile("./users.json", JSON.stringify(users), (err, data) => {
-            if (err) console.error(err);
-          });
-        } else {
-          bot.sendMessage(
-            users[user].id,
-            "Sorry for now there is no active bundle"
-          );
-        }
-      } else {
-        notSubscribed(users[user].id);
-      }
+      setTimeout(
+        sendBundles(userStatus, user),
+        users[user].bundle_sent - now + 12 * 60 * 60 * 1000
+      );
     }
   });
 }
@@ -170,22 +139,9 @@ bot.on(["/start", "/check"], async (msg) => {
           console.error(err);
         } else {
           console.log("new user saved to users.json");
-          console.log(data);
         }
       });
-      if (Object.keys(bundles).length) {
-        let bundle =
-          bundles[
-            Object.keys(bundles)[
-              Math.floor(Math.random() * Object.keys(bundles).length)
-            ]
-          ];
-        bot.forwardMessage(msg.chat.id, bundle.chat_id, bundle.message_id, {
-          notification: true,
-        });
-      } else {
-        bot.sendMessage(msg.chat.id, "Sorry for now there is no active bundle");
-      }
+      sendBundles(userStatus, msg.chat.id);
     }
   } else {
     notSubscribed(msg.chat.id);
@@ -253,14 +209,12 @@ bot.on("callbackQuery", (callbackQuery) => {
       });
       break;
     case "admin_add_channel":
-      if (!adminStatus) break;
       if (msg.chat.id == adminId) {
         adminEvent = "add_channel";
         bot.sendMessage(msg.chat.id, "Now enter the channel id");
       }
       break;
     case "admin_delete_channel":
-      if (!adminStatus) break;
       if (msg.chat.id == adminId) {
         bot.sendMessage(
           msg.chat.id,
@@ -277,21 +231,18 @@ bot.on("callbackQuery", (callbackQuery) => {
       }
       break;
     case "admin_bundles":
-      if (!adminStatus) break;
       if (msg.chat.id == adminId) {
         console.log(bundles);
         bot.sendMessage(msg.chat.id, JSON.stringify(bundles));
       }
       break;
     case "admin_channels":
-      if (!adminStatus) break;
       if (msg.chat.id == adminId) {
         console.log(channels);
         bot.sendMessage(msg.chat.id, JSON.stringify(channels));
       }
       break;
     case "admin_users":
-      if (!adminStatus) break;
       if (msg.chat.id == adminId) {
         console.log(users);
         if (Object.keys(users)) {
@@ -302,7 +253,6 @@ bot.on("callbackQuery", (callbackQuery) => {
       }
       break;
     case "admin_mail_bundles":
-      if (!adminStatus) break;
       if (msg.chat.id == adminId) {
         mailing();
         bot.sendMessage(msg.chat.id, "Bundles sent");
@@ -311,7 +261,6 @@ bot.on("callbackQuery", (callbackQuery) => {
     default:
       break;
   }
-  adminStatus = false;
 
   bot.answerCallbackQuery(callbackQuery.id);
 });
@@ -334,7 +283,6 @@ bot.on("/admin", (msg) => {
         { text: "Bundles", callback_data: "admin_bundles" },
       ],
     ];
-    adminStatus = true;
     bot.sendMessage(msg.chat.id, "Select option from the following menu", {
       replyMarkup: { inline_keyboard: keyboard },
     });
@@ -395,7 +343,6 @@ bot.on("text", async (msg) => {
       default:
         break;
     }
-    adminStatus = false;
     adminEvent = "none";
   }
   if (msg.chat.id == process.env.BUNDLE_CHANNEL_ID) {
