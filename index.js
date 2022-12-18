@@ -1,17 +1,38 @@
 import TeleBot from "telebot";
+import fs from "fs";
 import { config } from "dotenv";
 config();
 const bot = new TeleBot({ token: process.env.BOT_TOKEN, polling: true });
 
-const users = {};
+let users = {};
+fs.readFile("./users.json", (err, data) => {
+  if (err) {
+    console.error(err);
+  } else {
+    console.log(JSON.parse(data));
+    users = JSON.parse(data);
+  }
+});
 const adminId = parseInt(process.env.ADMIN_ID);
-const bundles = [];
-const channels = {};
+const bundles = {};
+const channels = {
+  "-1001655225764": {
+    id: -1001655225764,
+    title: "Test shapar 2",
+    link: "https://t.me/+oDY8B3emq10zMTYy",
+  },
+  "-1001629644742": {
+    id: -1001629644742,
+    title: "Test shapar",
+    link: "https://t.me/+WI7-RuTc3cQzZDk6",
+  },
+};
 
 //Test commands
 bot.on("/bundles", (msg) => {
   if (!msg.from) return;
-  if (bundles.length) bot.sendMessage(msg.chat.id, bundles.join("\r\n"));
+  if (Object.keys(bundles).length)
+    bot.sendMessage(msg.chat.id, Object.keys(bundles).join(" id\r\n"));
 });
 bot.on("/channels", (msg) => {
   if (!msg.from) return;
@@ -21,6 +42,18 @@ bot.on("/channels", (msg) => {
 //Vars to verify if admin gonna add smth
 let adminStatus = false;
 let adminEvent = "none";
+
+function clearBundles() {
+  if (Object.keys(bundles).length) {
+    Object.keys(bundles).map((bundle) => {
+      let now = new Date();
+      if (now - bundles[bundle].created > 1000 * 60 * 30) {
+        delete bundles[bundle];
+      }
+    });
+  }
+}
+setInterval(clearBundles, 30 * 60 * 1000);
 
 //Function to check if user subscribed the channels
 async function checkUser(userId) {
@@ -38,17 +71,37 @@ async function checkUser(userId) {
   return result;
 }
 
+function notSubscribed(userId) {
+  let keyboard = [[{ text: "Check Again", callback_data: "check" }]];
+  for (let channel of Object.keys(channels)) {
+    keyboard.unshift([
+      { text: channels[channel].title, url: channels[channel].link },
+    ]);
+    bot.sendMessage(userId, "You are not a member", {
+      replyMarkup: { inline_keyboard: keyboard },
+    });
+  }
+}
+
 //Send bundle to users
-async function mainling() {
-  console.log("users: ", users);
+async function mailing() {
   Object.keys(users).map(async (user) => {
-    let userStatus = await checkUser(users[user]);
+    let userStatus = await checkUser(users[user].id);
     if (userStatus) {
-      if (bundles.length) {
-        bot.sendMessage(
-          users[user].id,
-          bundles[Math.floor(Math.random() * bundles.length)]
-        );
+      if (Object.keys(bundles).length) {
+        let bundle =
+          bundles[
+            Object.keys(bundles)[
+              Math.floor(Math.random() * Object.keys(bundles).length)
+            ]
+          ];
+        bot.forwardMessage(users[user].id, bundle.chat_id, bundle.message_id, {
+          notification: true,
+        });
+        users[user].bundle_sent = new Date();
+        fs.writeFile("./users.json", JSON.stringify(users), (err, data) => {
+          if (err) console.error(err);
+        });
       } else {
         bot.sendMessage(
           users[user].id,
@@ -56,29 +109,54 @@ async function mainling() {
         );
       }
     } else {
-      let keyboard = [[{ text: "Check Again", callback_data: "check" }]];
-      for (let channel of Object.keys(channels)) {
-        keyboard.unshift([
-          { text: channels[channel].title, url: channels[channel].link },
-        ]);
-        bot.sendMessage(msg.chat.id, "You are not a member", {
-          replyMarkup: { inline_keyboard: keyboard },
-        });
+      notSubscribed(users[user].id);
+    }
+  });
+}
+
+async function autoMailing() {
+  console.log("checking for users that are able to recieve bundle");
+  Object.keys(users).map(async (user) => {
+    let now = new Date();
+    if (now.getHours() - users[user].bundle_sent.getHours() < 12) {
+      let userStatus = await checkUser(users[user].id);
+      if (userStatus) {
+        if (Object.keys(bundles).length) {
+          let bundle =
+            bundles[
+              Object.keys(bundles)[
+                Math.floor(Math.random() * Object.keys(bundles).length)
+              ]
+            ];
+          bot.forwardMessage(
+            users[user].id,
+            bundle.chat_id,
+            bundle.message_id,
+            {
+              notification: true,
+            }
+          );
+          users[user].bundle_sent = new Date();
+          fs.writeFile("./users.json", JSON.stringify(users), (err, data) => {
+            if (err) console.error(err);
+          });
+        } else {
+          bot.sendMessage(
+            users[user].id,
+            "Sorry for now there is no active bundle"
+          );
+        }
+      } else {
+        notSubscribed(users[user].id);
       }
     }
   });
 }
-setInterval(mainling, 1000 * 10);
+setInterval(autoMailing, 1000 * 60 * 60);
 
 //Basic commands the same functionality should verify user's subscriptions, send the first bundle and pass user to waiting list
 bot.on(["/start", "/check"], async (msg) => {
   if (!msg.from) return;
-  let keyboard = [[{ text: "Check Again", callback_data: "check" }]];
-  for (let channel of Object.keys(channels)) {
-    keyboard.unshift([
-      { text: channels[channel].title, url: channels[channel].link },
-    ]);
-  }
   let userStatus = await checkUser(msg.chat.id);
   if (userStatus) {
     bot.sendMessage(
@@ -86,13 +164,31 @@ bot.on(["/start", "/check"], async (msg) => {
       "You are a member. Thanks for subscription. Your bundle will be sent automaticly"
     );
     if (!users[msg.chat.id]) {
-      users[msg.chat.id] = { id: msg.chat.id };
-      bot.sendMessage(msg.chat.id, "Нихуя себе связка ща милионером станешь");
+      users[msg.chat.id] = { id: msg.chat.id, bundle_sent: new Date() };
+      fs.writeFile("./users.json", JSON.stringify(users), (err, data) => {
+        if (err) {
+          console.error(err);
+        } else {
+          console.log("new user saved to users.json");
+          console.log(data);
+        }
+      });
+      if (Object.keys(bundles).length) {
+        let bundle =
+          bundles[
+            Object.keys(bundles)[
+              Math.floor(Math.random() * Object.keys(bundles).length)
+            ]
+          ];
+        bot.forwardMessage(msg.chat.id, bundle.chat_id, bundle.message_id, {
+          notification: true,
+        });
+      } else {
+        bot.sendMessage(msg.chat.id, "Sorry for now there is no active bundle");
+      }
     }
   } else {
-    bot.sendMessage(msg.chat.id, "You are not a member", {
-      replyMarkup: { inline_keyboard: keyboard },
-    });
+    notSubscribed(msg.chat.id);
   }
 });
 
@@ -158,38 +254,84 @@ bot.on("callbackQuery", (callbackQuery) => {
       break;
     case "admin_add_channel":
       if (!adminStatus) break;
-      adminEvent = "add_channel";
-      bot.sendMessage(msg.chat.id, "Now enter the channel id");
+      if (msg.chat.id == adminId) {
+        adminEvent = "add_channel";
+        bot.sendMessage(msg.chat.id, "Now enter the channel id");
+      }
       break;
     case "admin_delete_channel":
       if (!adminStatus) break;
-      bot.sendMessage(
-        msg.chat.id,
-        `Enter the channel id \r\n The following are aviable ${Object.keys(
-          channels
-        ).join("; ")}`
-      );
-      adminEvent = "delete_channel";
+      if (msg.chat.id == adminId) {
+        bot.sendMessage(
+          msg.chat.id,
+          `Enter the channel id \r\n The following are aviable ${Object.keys(
+            channels
+          ).join("; ")}`
+        );
+        adminEvent = "delete_channel";
+      }
       break;
     case "delete_bundle":
-      console.log(msg);
-      bot.sendMessage(msg.chat.id, "Bundle deleted");
+      if (msg.chat.id == adminId) {
+        bot.sendMessage(msg.chat.id, "Bundle deleted");
+      }
+      break;
+    case "admin_bundles":
+      if (!adminStatus) break;
+      if (msg.chat.id == adminId) {
+        console.log(bundles);
+        bot.sendMessage(msg.chat.id, JSON.stringify(bundles));
+      }
+      break;
+    case "admin_channels":
+      if (!adminStatus) break;
+      if (msg.chat.id == adminId) {
+        console.log(channels);
+        bot.sendMessage(msg.chat.id, JSON.stringify(channels));
+      }
+      break;
+    case "admin_users":
+      if (!adminStatus) break;
+      if (msg.chat.id == adminId) {
+        console.log(users);
+        if (Object.keys(users)) {
+          bot.sendMessage(msg.chat.id, Object.keys(users).join("/r/n"));
+        } else {
+          bot.sendMessage(msg.chat.id, "no users");
+        }
+      }
+      break;
+    case "admin_mail_bundles":
+      if (!adminStatus) break;
+      if (msg.chat.id == adminId) {
+        mailing();
+        bot.sendMessage(msg.chat.id, "Bundles sent");
+      }
       break;
     default:
       break;
   }
+  adminStatus = false;
 
   bot.answerCallbackQuery(callbackQuery.id);
 });
 
-//Commant to auth admin
-bot.on("/channel", (msg) => {
+//Comman to auth admin
+bot.on("/admin", (msg) => {
   if (!msg.from) return;
   if (msg.chat.id == adminId) {
     let keyboard = [
       [
         { text: "Add channel", callback_data: "admin_add_channel" },
         { text: "Delete channel", callback_data: "admin_delete_channel" },
+      ],
+      [
+        { text: "Channels", callback_data: "admin_channels" },
+        { text: "Users", callback_data: "admin_users" },
+      ],
+      [
+        { text: "Send Bundles", callback_data: "admin_mail_bundles" },
+        { text: "Bundles", callback_data: "admin_bundles" },
       ],
     ];
     adminStatus = true;
@@ -199,35 +341,41 @@ bot.on("/channel", (msg) => {
   }
 });
 
-bot.on("/mail", (msg) => {
-  if (msg.from && msg.chat.id == adminId) {
-    mainling();
-  }
-});
-
 // Handler for admin events and adding bundles from bundle channel any other text message will be skipped
 bot.on("text", async (msg) => {
-  if (msg.from && msg.chat.id == adminId && adminStatus) {
+  if (msg.from && msg.chat.id == adminId) {
     switch (adminEvent) {
       case "add_channel":
-        if (!parseInt(msg.text)) break;
-        if (!channels[msg.text]) {
-          await bot
-            .getChat(parseInt(msg.text))
-            .then((res) => {
-              console.log(res);
-              channels[msg.text] = {
-                id: parseInt(msg.text),
-                link: res.invite_link,
-                title: res.title,
-              };
-            })
-            .catch((error) => console.log(error));
-          console.log(channels);
+        if (!parseInt(msg.text)) {
           bot.sendMessage(
             msg.chat.id,
-            `channel ${channels[msg.text].link}  ${msg.text} successful added`
+            "telegram channel id will be in form of -100**********"
           );
+          break;
+        }
+        if (!channels[msg.text]) {
+          try {
+            await bot
+              .getChat(parseInt(msg.text))
+              .then((res) => {
+                channels[msg.text] = {
+                  id: parseInt(msg.text),
+                  link: res.invite_link,
+                  title: res.title,
+                };
+              })
+              .catch((error) => console.error(error));
+            bot.sendMessage(
+              msg.chat.id,
+              `channel ${channels[msg.text].link}  ${msg.text} successful added`
+            );
+          } catch (error) {
+            console.log(error);
+            bot.sendMessage(
+              msg.chat.id,
+              "Some error occured check if bot is admin of the channel you are going to add and check if its id is in correct form of -100**********"
+            );
+          }
         } else {
           bot.sendMessage(
             msg.chat.id,
@@ -252,10 +400,18 @@ bot.on("text", async (msg) => {
   }
   if (msg.chat.id == process.env.BUNDLE_CHANNEL_ID) {
     let keyboard = [[{ text: "DELETE", callback_data: "delete_bundle" }]];
-    bundles.push(msg.text);
-    bot.sendMessage(msg.chat.id, "Bundle was added to a waiting list", {
-      replyMarkup: { inline_keyboard: keyboard },
-    });
+    bundles[msg.message_id] = {
+      chat_id: msg.chat.id,
+      message_id: msg.message_id,
+      created: new Date(),
+    };
+    bot.sendMessage(
+      msg.chat.id,
+      `Bundle id: ${msg.message_id} was added to a waiting list`,
+      {
+        replyMarkup: { inline_keyboard: keyboard },
+      }
+    );
   }
 });
 
