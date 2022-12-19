@@ -1,43 +1,72 @@
 import TeleBot from "telebot";
 import fs from "fs";
 import { config } from "dotenv";
+import axios from "axios";
 import {
   help_message,
   no_active_budle,
   subscription_positive,
 } from "./messages.js";
 config();
-const bot = new TeleBot({ token: process.env.BOT_TOKEN, polling: true });
+const bot = new TeleBot({
+  token: process.env.BOT_TOKEN,
+  polling: true,
+});
 
 let users = {};
 fs.readFile("./users.json", (err, data) => {
   if (err) {
     console.error(err);
   } else {
-    console.log(JSON.parse(data));
+    console.log("users", JSON.parse(data));
     users = JSON.parse(data);
+  }
+});
+let channels = {};
+fs.readFile("./channels.json", (err, data) => {
+  if (err) {
+    console.error(err);
+  } else {
+    console.log("channels", JSON.parse(data));
+    channels = JSON.parse(data);
   }
 });
 const adminId = parseInt(process.env.ADMIN_ID);
 const bundles = {};
-const channels = {
-  "-1001655225764": {
-    id: -1001655225764,
-    title: "Test shapar 2",
-    link: "https://t.me/+oDY8B3emq10zMTYy",
-  },
-  "-1001629644742": {
-    id: -1001629644742,
-    title: "Test shapar",
-    link: "https://t.me/+WI7-RuTc3cQzZDk6",
-  },
-};
 
-const sendBundlesAuto = process.env.SEND_BUNDLES_AUTO * 60 * 60 * 12;
-const checkUsersHours = process.env.CHECK_USERS_HOURS * 60 * 60 * 12;
+const sendBundlesAuto = process.env.SEND_BUNDLES_AUTO * 12;
+const checkUsersHours = process.env.CHECK_USERS_HOURS * 1000 * 60 * 60 * 12;
 
 //Vars to verify if admin gonna do smth
 let adminEvent = "none";
+
+function forwardMessage(userId, bundleChatId, bundleId) {
+  const options = {
+    method: "POST",
+    url: `https://api.telegram.org/bot${process.env.BOT_TOKEN}/forwardMessage`,
+    headers: {
+      accept: "application/json",
+      "User-Agent":
+        "Telegram Bot SDK - (https://github.com/irazasyed/telegram-bot-sdk)",
+      "content-type": "application/json",
+    },
+    data: {
+      message_id: bundleId,
+      disable_notification: false,
+      chat_id: userId,
+      from_chat_id: bundleChatId,
+      protect_content: true,
+    },
+  };
+  let result;
+  axios
+    .request(options)
+    .then((res) => {
+      result = res;
+    })
+    .catch((err) => console.error(err));
+  return result;
+}
 
 function clearBundles() {
   if (Object.keys(bundles).length) {
@@ -52,7 +81,7 @@ function clearBundles() {
   }
   console.log("Irrelevant bundles has been cleared");
 }
-setInterval(clearBundles, 30 * 60 * 1000);
+setInterval(clearBundles, 5 * 60 * 1000 - 1000);
 
 //Function to check if user subscribed the channels
 async function checkUser(userId) {
@@ -95,16 +124,17 @@ function sendBundles(userStatus, userId) {
             Math.floor(Math.random() * Object.keys(bundles).length)
           ]
         ];
-      bot.forwardMessage(userId, bundle.chat_id, bundle.message_id, {
-        notification: true,
-      });
+      console.log(userId, bundle);
+      forwardMessage(userId, bundle.chat_id, bundle.message_id);
       users[userId].bundle_sent = new Date();
       fs.writeFile("./users.json", JSON.stringify(users), (err, data) => {
         if (err) console.error(err);
       });
     } else {
       console.warn("No one relevant bundle in scrabber");
-      bot.sendMessage(users[userId].id, no_active_budle);
+      bot.sendMessage(users[userId].id, no_active_budle, {
+        protect_content: true,
+      });
     }
   } else {
     console.log(`User ${userId} is not subscribed`);
@@ -130,10 +160,11 @@ async function autoMailing() {
     if (now.getHours() - date.getHours() > sendBundlesAuto) {
       let userStatus = await checkUser(users[user].id);
       let callback = () => sendBundles(userStatus, user);
-      setTimeout(callback, date - now + sendBundlesAuto);
+      setTimeout(callback, date - now + sendBundlesAuto * 1000 * 60 * 60);
     }
   });
 }
+console.log(checkUsersHours);
 setInterval(autoMailing, checkUsersHours);
 
 //Basic commands the same functionality should verify user's subscriptions, send the first bundle and pass user to waiting list
@@ -313,6 +344,14 @@ bot.on("text", async (msg) => {
                 };
               })
               .catch((error) => console.error(error));
+            fs.writeFile(
+              "./channels.json",
+              JSON.stringify(channels),
+              (err, data) => {
+                if (err) console.error(err);
+              }
+            );
+            console.log(`Channel ${msg.text} successful added`);
             bot.sendMessage(
               msg.chat.id,
               `channel ${channels[msg.text].link}  ${msg.text} successful added`
@@ -335,7 +374,18 @@ bot.on("text", async (msg) => {
         if (!parseInt(msg.text)) break;
         if (channels[msg.text]) {
           delete channels[msg.text];
-          bot.sendMessage(`Channel ${msg.text} successful deleted`);
+          fs.writeFile(
+            "./channels.json",
+            JSON.stringify(channels),
+            (err, data) => {
+              if (err) console.error(err);
+            }
+          );
+          console.log(`Channel ${msg.text} successfull deleted`);
+          bot.sendMessage(
+            msg.chat.id,
+            `Channel ${msg.text} successful deleted`
+          );
         } else {
           bot.sendMessage(msg.chat.id, "There is no channel with this id");
         }
