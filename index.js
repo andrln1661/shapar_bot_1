@@ -8,6 +8,7 @@ import {
   subscription_positive,
 } from "./messages.js";
 config();
+
 const bot = new TeleBot({
   token: process.env.BOT_TOKEN,
   polling: true,
@@ -34,8 +35,8 @@ fs.readFile("./channels.json", (err, data) => {
 const adminId = parseInt(process.env.ADMIN_ID);
 const bundles = {};
 
-const sendBundlesAuto = process.env.SEND_BUNDLES_AUTO * 12;
-const checkUsersHours = process.env.CHECK_USERS_HOURS * 1000 * 60 * 60 * 12;
+let sendBundlesAuto = process.env.SEND_BUNDLES_AUTO;
+let clearBundlesTime = process.env.CLEAR_BUNDLES_TIME;
 
 //Vars to verify if admin gonna do smth
 let adminEvent = "none";
@@ -69,19 +70,25 @@ function forwardMessage(userId, bundleChatId, bundleId) {
 }
 
 function clearBundles() {
-  if (Object.keys(bundles).length) {
+  console.log("Неактуальные связки удалены");
+  if (Object.keys(bundles).length >= 0) {
     Object.keys(bundles).map((bundle) => {
       let now = new Date();
       if (now - bundles[bundle].created > 1000 * 60 * 30) {
-        delete bundles[bundle];
         bot.deleteMessage(-1001721564781, bundles[bundle].message_id);
         bot.deleteMessage(-1001721564781, bundles[bundle].message_id + 1);
+        delete bundles[bundle];
       }
     });
   }
-  console.log("Irrelevant bundles has been cleared");
+  if (Object.keys(bundles).length <= 0) {
+    console.log("В скрабере закончились связки");
+    bot.sendMessage(adminId, "В скрабере закончились связки", {
+      notification: true,
+    });
+  }
 }
-setInterval(clearBundles, 5 * 60 * 1000 - 1000);
+setInterval(clearBundles, parseInt(clearBundlesTime) * 60 * 1000 - 1000);
 
 //Function to check if user subscribed the channels
 async function checkUser(userId) {
@@ -95,27 +102,46 @@ async function checkUser(userId) {
       result = false;
     }
   }
-  console.log(`Checking if user ${userId} subscribed to the required channels`);
+  console.log(`Проверка подписки пользователя ${userId}`);
   return result;
 }
 
 // send message to user that he is not subscribed
 function notSubscribed(userId) {
-  console.log(`Sending message to user ${userId} that he is not subscribed`);
+  console.log(`Пользователь ${userId} не подписан. Отправка сообщения`);
   let keyboard = [[{ text: "Check Again", callback_data: "check" }]];
   for (let channel of Object.keys(channels)) {
     keyboard.unshift([
       { text: channels[channel].title, url: channels[channel].link },
     ]);
   }
-  bot.sendMessage(userId, "You are not a member", {
-    replyMarkup: { inline_keyboard: keyboard },
-  });
+  bot.sendMessage(
+    userId,
+    "Вы не подписаны на соответствующие каналы. Ссылки представлены снизу. После того как подпишитесь нажмите проверить снова или введите команду /check (/start)",
+    {
+      replyMarkup: { inline_keyboard: keyboard },
+    }
+  );
+}
+
+function justSendBundle(userId, qtyOfBundles) {
+  if (Object.keys(bundles).length) {
+    for (let i = 0; i < qtyOfBundles; i++) {
+      let bundle =
+        bundles[
+          Object.keys(bundles)[
+            Math.floor(Math.random() * Object.keys(bundles).length)
+          ]
+        ];
+      forwardMessage(userId, bundle.chat_id, bundle.message_id);
+    }
+  } else {
+    bot.sendMessage(userId, no_active_budle);
+  }
 }
 
 // Send bundle handler
 function sendBundles(userStatus, userId) {
-  console.log("Sending bundles to users");
   if (userStatus) {
     if (Object.keys(bundles).length) {
       let bundle =
@@ -131,10 +157,8 @@ function sendBundles(userStatus, userId) {
         if (err) console.error(err);
       });
     } else {
-      console.warn("No one relevant bundle in scrabber");
-      bot.sendMessage(users[userId].id, no_active_budle, {
-        protect_content: true,
-      });
+      console.warn("В скрабере закончились связки");
+      bot.sendMessage(users[userId].id, no_active_budle);
     }
   } else {
     console.log(`User ${userId} is not subscribed`);
@@ -144,7 +168,7 @@ function sendBundles(userStatus, userId) {
 
 //Send bundle to users
 async function mailing() {
-  console.log("Forced mailing calling by admin");
+  console.log("Админ вызвал принудительную рассылку связок");
   Object.keys(users).map(async (user) => {
     let userStatus = await checkUser(users[user].id);
     sendBundles(userStatus, user);
@@ -153,19 +177,18 @@ async function mailing() {
 
 //Auto send bundle for user as 12 hours passed
 async function autoMailing() {
-  console.log("Automatic mailing");
+  console.log("Автоматическая (по рассписанию) рассылка связок");
   Object.keys(users).map(async (user) => {
     let now = new Date();
     let date = new Date(users[user].bundle_sent);
-    if (now.getHours() - date.getHours() > sendBundlesAuto) {
+    if (date - now + sendBundlesAuto * 1000 * 60 * 60 < 1000 * 60 * 60) {
       let userStatus = await checkUser(users[user].id);
       let callback = () => sendBundles(userStatus, user);
       setTimeout(callback, date - now + sendBundlesAuto * 1000 * 60 * 60);
     }
   });
 }
-console.log(checkUsersHours);
-setInterval(autoMailing, checkUsersHours);
+setInterval(autoMailing, 1000 * 60 * 60);
 
 //Basic commands the same functionality should verify user's subscriptions, send the first bundle and pass user to waiting list
 bot.on(["/start", "/check"], async (msg) => {
@@ -173,15 +196,19 @@ bot.on(["/start", "/check"], async (msg) => {
   let userStatus = await checkUser(msg.chat.id);
   if (userStatus) {
     if (!users[msg.chat.id]) {
-      users[msg.chat.id] = { id: msg.chat.id, bundle_sent: new Date() };
+      users[msg.chat.id] = {
+        id: msg.chat.id,
+        bundle_sent: new Date(),
+        started: true,
+      };
       fs.writeFile("./users.json", JSON.stringify(users), (err, data) => {
         if (err) {
           console.error(err);
         } else {
-          console.log("new user saved to users.json");
+          console.log("Новый пользователь сохранен в users.json");
         }
       });
-      sendBundles(true, msg.chat.id);
+      justSendBundle(msg.chat.id, 2);
     }
     bot.sendMessage(msg.chat.id, subscription_positive);
   } else {
@@ -241,36 +268,50 @@ bot.on("callbackQuery", (callbackQuery) => {
     case "admin_add_channel":
       if (msg.chat.id == adminId) {
         adminEvent = "add_channel";
-        bot.sendMessage(msg.chat.id, "Now enter the channel id");
+        bot.sendMessage(
+          msg.chat.id,
+          "Введите id канала в формате -100**********"
+        );
       }
       break;
     case "admin_delete_channel":
       if (msg.chat.id == adminId) {
         bot.sendMessage(
           msg.chat.id,
-          `Enter the channel id \r\n The following are aviable ${Object.keys(
+          `Удаление канала. Введите id канала из списка \r\n ${Object.keys(
             channels
-          ).join("; ")}`
+          ).join("\r\n")}`
         );
         adminEvent = "delete_channel";
       }
       break;
     case "delete_bundle":
-      console.log(`Forced delete bundle ${msg.message_id - 1}`);
+      console.log(`Принудительное удаление связки ${msg.message_id - 1}`);
       if (bundles[msg.message_id - 1]) delete bundles[msg.message_id - 1];
-      bot.deleteMessage(-1001721564781, msg.message_id - 1);
-      bot.deleteMessage(-1001721564781, msg.message_id);
+      bot.deleteMessage(
+        parseInt(process.env.BUNDLE_CHANNEL_ID),
+        msg.message_id - 1
+      );
+      bot.deleteMessage(
+        parseInt(process.env.BUNDLE_CHANNEL_ID),
+        msg.message_id
+      );
       break;
     case "admin_bundles":
       if (msg.chat.id == adminId) {
         console.log(bundles);
-        bot.sendMessage(msg.chat.id, JSON.stringify(bundles));
+        bot.sendMessage(msg.chat.id, JSON.stringify(bundles, null, 2));
       }
+      break;
+    case "admin_clear_bundles":
+      clearBundles();
+      console.log("Принудительное удаление связок");
+      bot.sendMessage(msg.chat.id, "All bundles deleted");
       break;
     case "admin_channels":
       if (msg.chat.id == adminId) {
         console.log(channels);
-        bot.sendMessage(msg.chat.id, JSON.stringify(channels));
+        bot.sendMessage(msg.chat.id, JSON.stringify(channels, null, 2));
       }
       break;
     case "admin_users":
@@ -279,16 +320,17 @@ bot.on("callbackQuery", (callbackQuery) => {
         if (Object.keys(users).length) {
           bot.sendMessage(msg.chat.id, Object.keys(users).join("/r/n"));
         } else {
-          bot.sendMessage(msg.chat.id, "no users");
+          bot.sendMessage(msg.chat.id, "нет пользователей");
         }
       }
       break;
     case "admin_mail_bundles":
       if (msg.chat.id == adminId) {
         mailing();
-        bot.sendMessage(msg.chat.id, "Bundles sent");
+        bot.sendMessage(msg.chat.id, "Связки отправлены");
       }
       break;
+
     default:
       break;
   }
@@ -296,27 +338,32 @@ bot.on("callbackQuery", (callbackQuery) => {
   bot.answerCallbackQuery(callbackQuery.id);
 });
 
-//Comman to auth admin
+//Command to auth admin
 bot.on("/admin", (msg) => {
   if (!msg.from) return;
   if (msg.chat.id == adminId) {
     let keyboard = [
       [
-        { text: "Add channel", callback_data: "admin_add_channel" },
-        { text: "Delete channel", callback_data: "admin_delete_channel" },
+        { text: "Добавить канал", callback_data: "admin_add_channel" },
+        { text: "Удалить канал", callback_data: "admin_delete_channel" },
       ],
       [
-        { text: "Channels", callback_data: "admin_channels" },
-        { text: "Users", callback_data: "admin_users" },
+        { text: "Показать каналы", callback_data: "admin_channels" },
+        { text: "Показать пользователей", callback_data: "admin_users" },
       ],
       [
-        { text: "Send Bundles", callback_data: "admin_mail_bundles" },
-        { text: "Bundles", callback_data: "admin_bundles" },
+        { text: "Отправить связки", callback_data: "admin_mail_bundles" },
+        { text: "Показать связки", callback_data: "admin_bundles" },
       ],
+      [{ text: "Удалить все связки", callback_data: "admin_clear_bundles" }],
     ];
-    bot.sendMessage(msg.chat.id, "Select option from the following menu", {
-      replyMarkup: { inline_keyboard: keyboard },
-    });
+    bot.sendMessage(
+      msg.chat.id,
+      "Меню админа. \r\n выберите действие из представленных ниже",
+      {
+        replyMarkup: { inline_keyboard: keyboard },
+      }
+    );
   }
 });
 
@@ -328,7 +375,7 @@ bot.on("text", async (msg) => {
         if (!parseInt(msg.text)) {
           bot.sendMessage(
             msg.chat.id,
-            "telegram channel id will be in form of -100**********"
+            "Id телеграм канала должен быть в форме -100**********"
           );
           break;
         }
@@ -351,27 +398,33 @@ bot.on("text", async (msg) => {
                 if (err) console.error(err);
               }
             );
-            console.log(`Channel ${msg.text} successful added`);
+            console.log(`Канал ${msg.text} успешно добавлен`);
             bot.sendMessage(
               msg.chat.id,
-              `channel ${channels[msg.text].link}  ${msg.text} successful added`
+              `Канал ${channels[msg.text].link}  ${msg.text} успешно добавлен`
             );
           } catch (error) {
             console.log(error);
             bot.sendMessage(
               msg.chat.id,
-              "Some error occured check if bot is admin of the channel you are going to add and check if its id is in correct form of -100**********"
+              "Произошла ошибка при добавлении канала. Проверьте в консоли. Убедитесь что id предоставлен в форме -100**********"
             );
           }
         } else {
           bot.sendMessage(
             msg.chat.id,
-            `Channel id:${msg.text} has already been declared`
+            `Канал ${msg.text} уже имеется в спискe`
           );
         }
         break;
       case "delete_channel":
-        if (!parseInt(msg.text)) break;
+        if (!parseInt(msg.text)) {
+          bot.sendMessage(
+            msg.chat.id,
+            "Неверный формат. id должен быть в виде -100***********"
+          );
+          break;
+        }
         if (channels[msg.text]) {
           delete channels[msg.text];
           fs.writeFile(
@@ -381,13 +434,13 @@ bot.on("text", async (msg) => {
               if (err) console.error(err);
             }
           );
-          console.log(`Channel ${msg.text} successfull deleted`);
+          console.log(`Канал ${msg.text} успешно удален`);
+          bot.sendMessage(msg.chat.id, `Канал ${msg.text} успешно удален`);
+        } else {
           bot.sendMessage(
             msg.chat.id,
-            `Channel ${msg.text} successful deleted`
+            "Канал с предоставленным id не содержится в списке"
           );
-        } else {
-          bot.sendMessage(msg.chat.id, "There is no channel with this id");
         }
         break;
       default:
@@ -396,19 +449,16 @@ bot.on("text", async (msg) => {
     adminEvent = "none";
   }
   if (msg.chat.id == process.env.BUNDLE_CHANNEL_ID) {
-    let keyboard = [[{ text: "DELETE", callback_data: "delete_bundle" }]];
+    let keyboard = [[{ text: "Удалить", callback_data: "delete_bundle" }]];
     bundles[msg.message_id] = {
       chat_id: msg.chat.id,
       message_id: msg.message_id,
       created: new Date(),
     };
-    bot.sendMessage(
-      msg.chat.id,
-      `Bundle id: ${msg.message_id} was added to a waiting list`,
-      {
-        replyMarkup: { inline_keyboard: keyboard },
-      }
-    );
+    console.log(`Связкa ${msg.message_id} добавлена`);
+    bot.sendMessage(msg.chat.id, `Связка id: ${msg.message_id} добавлена`, {
+      replyMarkup: { inline_keyboard: keyboard },
+    });
   }
 });
 
