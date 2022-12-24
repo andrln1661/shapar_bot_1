@@ -201,6 +201,13 @@ setInterval(autoMailing, 1000 * 60 * 60);
 //Basic commands the same functionality should verify user's subscriptions, send the first bundle and pass user to waiting list
 bot.on(["/start", "/check"], async (msg) => {
   if (!msg.from) return;
+  if (!Object.keys(users).includes(msg.chat.id.toString())) {
+    justSendBundle(msg.chat.id, 2);
+    bot.sendMessage(
+      msg.chat.id,
+      "Привет, сейчас тебе будет предложенно подписаться на каналы для дальнейшего получения бесплатных связок, как только ты подпишешься нажми check или введи команду /check (/start)"
+    );
+  }
   let userStatus = await checkUser(msg.chat.id);
   if (userStatus) {
     if (!users[msg.chat.id]) {
