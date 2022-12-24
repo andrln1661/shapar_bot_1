@@ -2,11 +2,6 @@ import TeleBot from "telebot";
 import fs from "fs";
 import { config } from "dotenv";
 import axios from "axios";
-import {
-  help_message,
-  no_active_budle,
-  subscription_positive,
-} from "./messages.js";
 config();
 
 const bot = new TeleBot({
@@ -32,8 +27,9 @@ fs.readFile("./channels.json", (err, data) => {
     channels = JSON.parse(data);
   }
 });
-const adminId = parseInt(process.env.ADMIN_ID);
 const bundles = {};
+const adminId = parseInt(process.env.ADMIN_ID);
+const adminUsername = (await bot.getChat(adminId)).username;
 
 let sendBundlesAuto = process.env.SEND_BUNDLES_AUTO;
 let clearBundlesTime = process.env.CLEAR_BUNDLES_TIME;
@@ -44,7 +40,7 @@ let adminEvent = "none";
 function forwardMessage(userId, bundleChatId, bundleId) {
   const options = {
     method: "POST",
-    url: `https://api.telegram.org/bot${process.env.BOT_TOKEN}/forwardMessage`,
+    url: `https://api.telegram.org/bot${process.env.BOT_TOKEN}/copyMessage`,
     headers: {
       accept: "application/json",
       "User-Agent":
@@ -75,8 +71,14 @@ function clearBundles() {
     Object.keys(bundles).map((bundle) => {
       let now = new Date();
       if (now - bundles[bundle].created > 1000 * 60 * 30) {
-        bot.deleteMessage(-1001721564781, bundles[bundle].message_id);
-        bot.deleteMessage(-1001721564781, bundles[bundle].message_id + 1);
+        bot.deleteMessage(
+          process.env.BUNDLE_CHANNEL_ID,
+          bundles[bundle].message_id
+        );
+        bot.deleteMessage(
+          process.env.BUNDLE_CHANNEL_ID,
+          bundles[bundle].message_id + 1
+        );
         delete bundles[bundle];
       }
     });
@@ -136,7 +138,10 @@ function justSendBundle(userId, qtyOfBundles) {
       forwardMessage(userId, bundle.chat_id, bundle.message_id);
     }
   } else {
-    bot.sendMessage(userId, no_active_budle);
+    bot.sendMessage(
+      userId,
+      "К сожалению на данный момент актуальных связок нет.\r\n Они будут высланы вам автоматически как только появятся."
+    );
   }
 }
 
@@ -158,7 +163,10 @@ function sendBundles(userStatus, userId) {
       });
     } else {
       console.warn("В скрабере закончились связки");
-      bot.sendMessage(users[userId].id, no_active_budle);
+      bot.sendMessage(
+        users[userId].id,
+        "К сожалению на данный момент актуальных связок нет.\r\n Они будут высланы вам автоматически как только появятся."
+      );
     }
   } else {
     console.log(`User ${userId} is not subscribed`);
@@ -210,7 +218,10 @@ bot.on(["/start", "/check"], async (msg) => {
       });
       justSendBundle(msg.chat.id, 2);
     }
-    bot.sendMessage(msg.chat.id, subscription_positive);
+    bot.sendMessage(
+      msg.chat.id,
+      `Спасибо за подписку. \r\nВаша связка будет отправлена вам автоматически.\r\n Если вы заметили какие-то ошибки, пожалйста напишите @${adminUsername}`
+    );
   } else {
     notSubscribed(msg.chat.id);
   }
@@ -234,11 +245,21 @@ bot.on("/help", (msg) => {
       },
     ],
   ];
-  bot.sendMessage(msg.chat.id, help_message, {
-    replyMarkup: {
-      inline_keyboard: keyboard,
-    },
-  });
+  bot.sendMessage(
+    msg.chat.id,
+    `
+  Если вы подпишетесь на указаные каналы этот бот будет автоматически отправлять вам связки с интервалом в определенное кол-во часов
+
+/start (/check) - проверить подписки 
+
+if you need more detailed explanation or smth else contact @${adminUsername}
+    `,
+    {
+      replyMarkup: {
+        inline_keyboard: keyboard,
+      },
+    }
+  );
 });
 
 //Query handler (buttons)
@@ -448,6 +469,21 @@ bot.on("text", async (msg) => {
     }
     adminEvent = "none";
   }
+  if (msg.chat.id == process.env.BUNDLE_CHANNEL_ID) {
+    let keyboard = [[{ text: "Удалить", callback_data: "delete_bundle" }]];
+    bundles[msg.message_id] = {
+      chat_id: msg.chat.id,
+      message_id: msg.message_id,
+      created: new Date(),
+    };
+    console.log(`Связкa ${msg.message_id} добавлена`);
+    bot.sendMessage(msg.chat.id, `Связка id: ${msg.message_id} добавлена`, {
+      replyMarkup: { inline_keyboard: keyboard },
+    });
+  }
+});
+
+bot.on("forward", (msg) => {
   if (msg.chat.id == process.env.BUNDLE_CHANNEL_ID) {
     let keyboard = [[{ text: "Удалить", callback_data: "delete_bundle" }]];
     bundles[msg.message_id] = {
